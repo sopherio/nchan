@@ -101,6 +101,53 @@ ngx_int_t ngx_http_complex_value_noalloc(ngx_http_request_t *r, ngx_http_complex
   return NGX_OK;
 }
 
+ngx_int_t ngx_http_complex_value_custom_pool(ngx_http_request_t *r, ngx_http_complex_value_t *val, ngx_str_t *value, ngx_pool_t *pool) {
+  size_t                        len;
+  ngx_http_script_code_pt       code;
+  ngx_http_script_len_code_pt   lcode;
+  ngx_http_script_engine_t      e;
+
+  if (val->lengths == NULL) {
+    *value = val->value;
+    return NGX_OK;
+  }
+
+  ngx_http_script_flush_complex_value(r, val);
+
+  ngx_memzero(&e, sizeof(ngx_http_script_engine_t));
+
+  e.ip = val->lengths;
+  e.request = r;
+  e.flushed = 1;
+
+  len = 0;
+
+  while (*(uintptr_t *) e.ip) {
+    lcode = *(ngx_http_script_len_code_pt *) e.ip;
+    len += lcode(&e);
+  }
+  
+  value->data = ngx_palloc(pool, len);
+  if(value->data == NULL) {
+    nchan_log_error("couldn't palloc for ngx_http_complex_value_custom_pool");
+    return NGX_ERROR;
+  }
+  value->len = len;
+
+  e.ip = val->values;
+  e.pos = value->data;
+  e.buf = *value;
+
+  while (*(uintptr_t *) e.ip) {
+    code = *(ngx_http_script_code_pt *) e.ip;
+    code((ngx_http_script_engine_t *) &e);
+  }
+
+  *value = e.buf;
+
+  return NGX_OK;
+}
+
 u_char *nchan_strsplit(u_char **s1, ngx_str_t *sub, u_char *last_char) {
   u_char   *delim = sub->data;
   size_t    delim_sz = sub->len;
@@ -693,7 +740,7 @@ static ngx_path_t      *message_temp_path = NULL;
 
 ngx_int_t nchan_common_deflate_init(nchan_main_conf_t  *mcf) {
   int rc;
-  
+  int windowBits;
   message_temp_path = mcf->message_temp_path;
   
   if((deflate_zstream = ngx_calloc(sizeof(*deflate_zstream), ngx_cycle->log)) == NULL) {
@@ -701,11 +748,13 @@ ngx_int_t nchan_common_deflate_init(nchan_main_conf_t  *mcf) {
     return NGX_ERROR;
   }
   
+  windowBits = -mcf->zlib_params.windowBits; //negative to disable headers and use a raw stream
+  
   deflate_zstream->zalloc = Z_NULL;
   deflate_zstream->zfree = Z_NULL;
   deflate_zstream->opaque = Z_NULL;
   
-  rc = deflateInit2(deflate_zstream, (int) mcf->zlib_params.level, Z_DEFLATED, mcf->zlib_params.windowBits, mcf->zlib_params.memLevel, mcf->zlib_params.strategy);
+  rc = deflateInit2(deflate_zstream, (int) mcf->zlib_params.level, Z_DEFLATED, windowBits, mcf->zlib_params.memLevel, mcf->zlib_params.strategy);
   if(rc != Z_OK) {
     nchan_log_error("couldn't initialize deflate stream.");
     deflate_zstream = NULL;
@@ -931,7 +980,16 @@ ngx_buf_t *nchan_inflate(z_stream *stream, ngx_buf_t *in, ngx_http_request_t *r,
     }
     rc = inflate(stream, trailer_appended ? Z_SYNC_FLUSH : Z_NO_FLUSH);
     assert(rc != Z_STREAM_ERROR);
-    
+    switch (rc) {
+      case Z_DATA_ERROR:
+        nchan_log_request_error(r, "inflate error %d: %s", rc, stream->msg);
+        break;
+      case Z_NEED_DICT:
+      case Z_MEM_ERROR:
+        nchan_log_request_error(r, "inflate error %d", rc);
+        break;
+    }
+
     have = ZLIB_CHUNK - stream->avail_out;
     
     if(stream->avail_out == 0 && tf == NULL) {
@@ -942,7 +1000,7 @@ ngx_buf_t *nchan_inflate(z_stream *stream, ngx_buf_t *in, ngx_http_request_t *r,
       ngx_write_file(&tf->file, outbuf, have, written);
     }
     written += have;
-  } while(rc != Z_BUF_ERROR);
+  } while(rc == Z_OK);
   
   if(mmapped) {
     munmap(mm_instr.data, mm_instr.len);

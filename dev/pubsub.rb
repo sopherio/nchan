@@ -444,7 +444,15 @@ class Subscriber
         end
         @ws = WebSocket::Driver.client self, driver_opt
         if opt[:permessage_deflate]
-          @ws.add_extension PermessageDeflate
+          if opt[:permessage_deflate_max_window_bits] or opt[:permessage_deflate_server_max_window_bits]
+            deflate = PermessageDeflate.configure(
+              :max_window_bits => opt[:permessage_deflate_max_window_bits],
+              :request_max_window_bits => opt[:permessage_deflate_server_max_window_bits]
+            )
+            @ws.add_extension deflate
+          else
+            @ws.add_extension PermessageDeflate
+          end
         end
         
         @sock = sock
@@ -503,6 +511,8 @@ class Subscriber
       if opt[:permessage_deflate]
         @permessage_deflate = true
       end
+      @permessage_deflate_max_window_bits = opt[:permessage_deflate_max_window_bits]
+      @permessage_deflate_server_max_window_bits = opt[:permessage_deflate_server_max_window_bits]
       
       @concurrency=(opt[:concurrency] || opt[:clients] || 1).to_i
       @retry_delay=opt[:retry_delay]
@@ -555,7 +565,7 @@ class Subscriber
           hs_url=@url
         end        
         
-        bundle = WebSocketBundle.new hs_url, sock, id: i, permessage_deflate: @permessage_deflate, subprotocol: @subprotocol, logger: @logger
+        bundle = WebSocketBundle.new hs_url, sock, id: i, permessage_deflate: @permessage_deflate, subprotocol: @subprotocol, logger: @logger, permessage_deflate_max_window_bits: @permessage_deflate_max_window_bits, permessage_deflate_server_max_window_bits: @permessage_deflate_server_max_window_bits
         
         bundle.ws.on :open do |ev|
           bundle.connected = true
@@ -1653,15 +1663,20 @@ class Publisher
         if @messages && sent
           @messages << sent[:msg]
         end
-        sent[:condition].signal true if sent[:condition]
         
         self.response=Typhoeus::Response.new
         self.response_code=200 #fake it
         self.response_body=msg
         
+        sent[:response] = self.response
+        sent[:condition].signal true if sent[:condition]
+        
         @on_response.call(self.response_code, self.response_body) if @on_response
-
       end
+      @ws.on_failure do |err|
+        raise PublisherError, err
+      end
+      
       @ws.run
       @ws.wait :ready
     end
@@ -1750,7 +1765,9 @@ class Publisher
       @ws.client.send_data(body)
     end
     if @ws_wait_until_response
-      sent[:condition].wait
+      while not sent[:response] do
+        Celluloid.sleep 0.1
+      end
     end
     sent[:msg]
   end

@@ -86,7 +86,7 @@ static void * nchan_create_main_conf(ngx_conf_t *cf) {
   
 #if (NGX_ZLIB)
   mcf->zlib_params.level = Z_DEFAULT_COMPRESSION;
-  mcf->zlib_params.windowBits = -10;
+  mcf->zlib_params.windowBits = 10;
   mcf->zlib_params.memLevel = 8;
   mcf->zlib_params.strategy = Z_DEFAULT_STRATEGY;
 #endif
@@ -162,6 +162,9 @@ static void *nchan_create_loc_conf(ngx_conf_t *cf) {
   
   lcf->msg_in_etag_only = NGX_CONF_UNSET;
   
+  lcf->allow_origin = NULL;
+  lcf->allow_credentials = NGX_CONF_UNSET;
+  
   lcf->channel_events_channel_id = NULL;
   lcf->channel_event_string = NULL;
   
@@ -182,7 +185,6 @@ static void *nchan_create_loc_conf(ngx_conf_t *cf) {
   lcf->redis.ping_interval = NGX_CONF_UNSET;
   lcf->redis.upstream_inheritable=NGX_CONF_UNSET;
   lcf->redis.storage_mode = REDIS_MODE_CONF_UNSET;
-  lcf->redis.after_connect_wait_time = NGX_CONF_UNSET;
   lcf->redis.privdata = NULL;
   lcf->redis.nodeset = NULL;
   
@@ -327,6 +329,7 @@ static char * nchan_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child) {
   
   ngx_conf_merge_str_value(conf->channel_id_split_delimiter, prev->channel_id_split_delimiter, "");
   MERGE_CONF(conf, prev, allow_origin);
+  ngx_conf_merge_value(conf->allow_credentials, prev->allow_credentials, 1);
   ngx_conf_merge_str_value(conf->eventsource_event, prev->eventsource_event, "");
   ngx_conf_merge_str_value(conf->custom_msgtag_header, prev->custom_msgtag_header, "");
   ngx_conf_merge_value(conf->msg_in_etag_only, prev->msg_in_etag_only, 0);
@@ -392,7 +395,6 @@ static char * nchan_merge_loc_conf(ngx_conf_t *cf, void *parent, void *child) {
   ngx_conf_merge_str_value(conf->redis.url, prev->redis.url, NCHAN_REDIS_DEFAULT_URL);
   ngx_conf_merge_str_value(conf->redis.namespace, prev->redis.namespace, "");
   ngx_conf_merge_value(conf->redis.ping_interval, prev->redis.ping_interval, NCHAN_REDIS_DEFAULT_PING_INTERVAL_TIME);
-  ngx_conf_merge_sec_value(conf->redis.after_connect_wait_time, prev->redis.after_connect_wait_time, 0);
   
   if(conf->redis.url_enabled) {
     conf->redis.enabled = 1;
@@ -744,7 +746,7 @@ static char *nchan_conf_deflate_compression_window_directive(ngx_conf_t *cf, ngx
     return "must be between 9 and 15";
   }
   
-  mcf->zlib_params.windowBits = -np;
+  mcf->zlib_params.windowBits = np;
 #endif
   return NGX_CONF_OK;
 }
@@ -758,11 +760,11 @@ static char *nchan_conf_deflate_compression_memlevel_directive(ngx_conf_t *cf, n
   if (np == NGX_ERROR) {
     return "invalid number";
   }
-  if(np < 9 || np > 15) {
+  if(np < 1 || np > 9) {
     return "must be between 1 and 9";
   }
   
-  mcf->zlib_params.windowBits = -np;
+  mcf->zlib_params.memLevel = np;
 #endif
   return NGX_CONF_OK;
 }

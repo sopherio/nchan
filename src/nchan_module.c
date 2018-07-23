@@ -569,7 +569,9 @@ ngx_int_t nchan_pubsub_handler(ngx_http_request_t *r) {
         nchan_log_request_error(r, "unable to create websocket subscriber");
         return NGX_HTTP_INTERNAL_SERVER_ERROR;
       }
-      sub->fn->subscribe(sub, channel_id);
+      if(sub->fn->subscribe(sub, channel_id) != NGX_OK) {
+        return NGX_HTTP_INTERNAL_SERVER_ERROR;
+      }
 #if FAKESHARD      
       memstore_sub_debug_end();
 #endif
@@ -624,7 +626,9 @@ ngx_int_t nchan_pubsub_handler(ngx_http_request_t *r) {
             return NGX_HTTP_INTERNAL_SERVER_ERROR;
           }
           
-          sub->fn->subscribe(sub, channel_id);
+          if(sub->fn->subscribe(sub, channel_id) != NGX_OK) {
+            return NGX_HTTP_INTERNAL_SERVER_ERROR;
+          }
 #if FAKESHARD
           memstore_sub_debug_end();
 #endif
@@ -976,7 +980,7 @@ static void nchan_publisher_body_handler_continued(ngx_http_request_t *r, ngx_st
         psrd->ch_id = channel_id;
         
         ngx_http_subrequest(r, &publisher_upstream_request_url, NULL, &sr, psr, NGX_HTTP_SUBREQUEST_IN_MEMORY);
-        nchan_adjust_subrequest(sr, NGX_HTTP_POST, &POST_REQUEST_STRING, r->request_body, r->headers_in.content_length_n, NULL);
+        nchan_adjust_subrequest(sr, NGX_HTTP_POST, &POST_REQUEST_STRING, r->request_body, r->headers_in.content_length_n);
         sr->args = r->args;
       }
       break;

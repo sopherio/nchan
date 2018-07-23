@@ -417,13 +417,12 @@ CfCmd.new do
       info: "Send a keepalive command to redis to keep the Nchan redis clients from disconnecting. Set to 0 to disable."
   
   nchan_redis_wait_after_connecting [:main, :srv, :loc],
-      :ngx_conf_set_sec_slot,
-      [:loc_conf, :"redis.after_connect_wait_time"],
+      :nchan_ignore_obsolete_setting,
+      :loc_conf,
       
-      group: "storage",
+      group: "obsolete",
       tags: ['redis'],
-      default: "0s",
-      info: "Wait this amount of time after connecting to Redis to process requests. Useful when dealng with connections to Redis cluster nodes of unknown role."
+      uncocumented: true
   
   nchan_redis_connect_timeout [:upstream],
       :ngx_conf_set_msec_slot,
@@ -527,6 +526,17 @@ CfCmd.new do
       tags: ['publisher', 'subscriber'],
       default: "$http_origin",
       info: "Set the [Cross-Origin Resource Sharing (CORS)](https://developer.mozilla.org/en-US/docs/Web/HTTP/Access_control_CORS) `Access-Control-Allow-Origin` header to this value. If the incoming request's `Origin` header does not match this value, respond with a `403 Forbidden`."
+
+  nchan_access_control_allow_credentials [:main, :srv, :loc, :if], 
+      :ngx_conf_set_flag_slot,
+      [:loc_conf, :allow_credentials],
+      args: 1,
+      
+      group: "security",
+      tags: ['publisher', 'subscriber'],
+      default: "on",
+      info: "When enabled, sets the [Cross-Origin Resource Sharing (CORS)](https://developer.mozilla.org/en-US/docs/Web/HTTP/Access_control_CORS) `Access-Control-Allow-Credentials` header to `true`."
+  
   
   nchan_channel_group [:srv, :loc, :if], 
       :ngx_http_set_complex_value_slot, 

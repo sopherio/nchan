@@ -16,6 +16,7 @@ $server_url="http://127.0.0.1:8082"
 $default_client=:longpoll
 $omit_longmsg=false
 $verbose=false
+$ordered_tests = false
 
 extra_opts = []
 orig_args = ARGV.dup
@@ -32,6 +33,7 @@ opt=OptionParser.new do |opts|
     puts opts
     raise OptionParser::InvalidOption , "--help"
   end
+  opts.on("--ordered", "order tests alphabetically"){$ordered_tests = true}
 end
 
 begin
@@ -79,6 +81,12 @@ end
 class PubSubTest <  Minitest::Test
   def setup
     Celluloid.boot
+  end
+  
+  if $ordered_tests
+    def self.test_order
+      :alpha
+    end
   end
   
   def test_interval_poll
@@ -930,6 +938,9 @@ class PubSubTest <  Minitest::Test
   def assert_header_includes(description, response, header, str)
     assert response.headers[header].include?(str), "#{description} response header '#{header}: #{response.headers[header]}' must contain \"#{str}\", but does not."
   end
+  def assert_header_absent(description, response, header)
+    assert response.headers[header].nil?, "#{description} response header '#{header}' must be absent."
+  end
   
   def test_access_control_options
     chan=SecureRandom.hex
@@ -941,6 +952,7 @@ class PubSubTest <  Minitest::Test
     %w( GET ).each do |v| 
       assert_header_includes "subscriber CORS", resp, "Access-Control-Allow-Methods", v
       assert_header_includes "subscriber CORS", resp, "Allow", v
+      assert_header_includes "subscriber CORS", resp, "Access-Control-Allow-Credentials", "true"
     end
     %w( If-None-Match If-Modified-Since Content-Type Cache-Control X-EventSource-Event ).each {|v| assert_header_includes "subscriber CORS", resp, "Access-Control-Allow-Headers", v}
     
@@ -970,6 +982,13 @@ class PubSubTest <  Minitest::Test
     resp = request.run
     %w( If-None-Match If-Modified-Since Content-Type Cache-Control X-EventSource-Event ).each {|v| assert_header_includes "pubsub CORS", resp, "Access-Control-Allow-Headers", v}
     
+    request = Typhoeus::Request.new url("/pub/#{chan}"), method: :GET, headers: { 'Origin' => "https://example.com" }
+    resp  = request.run
+    assert_header_includes "publisher GET", resp, "Access-Control-Allow-Credentials", "true"
+    
+    request = Typhoeus::Request.new url("/pub/nocredentials/#{chan}"), method: :GET, headers: { 'Origin' => "https://example.com" }
+    resp  = request.run
+    assert_header_absent "publisher GET", resp, "Access-Control-Allow-Credentials"
   end
   
   def generic_test_access_control(opt)
@@ -1396,7 +1415,7 @@ class PubSubTest <  Minitest::Test
     
     ver= proc do |bundle| 
       assert_equal "http://foo.bar", bundle.headers["Access-Control-Allow-Origin"] 
-      %w( Last-Modified Etag ).each {|v| assert_header_includes bundle, "Access-Control-Expose-Headers", v}
+      %w( Last-Modified Etag ).each {|v| assert_header_includes "CORS Expose-Headers", bundle, "Access-Control-Expose-Headers", v}
     end
     generic_test_access_control(origin: "http://foo.bar", verify_sub_response: ver, sub_url: "sub/from_foo.bar/") do |pub, sub|
       verify pub, sub
@@ -1406,7 +1425,7 @@ class PubSubTest <  Minitest::Test
     origin_host=""
     ver= proc do |bundle| 
       assert_equal origin_host, bundle.headers["Access-Control-Allow-Origin"]
-      %w( Last-Modified Etag ).each {|v| assert_header_includes bundle, "Access-Control-Expose-Headers", v}
+      %w( Last-Modified Etag ).each {|v| assert_header_includes "CORS Expose-Headers", bundle, "Access-Control-Expose-Headers", v}
     end
     origin_host="http://foo.bar"
     generic_test_access_control(origin: origin_host, verify_sub_response: ver, param: {foo: "foobar"}, sub_url: "/sub/access_control_in_if_block/") do |pub, sub|
@@ -1635,6 +1654,7 @@ class PubSubTest <  Minitest::Test
       pub.post "q"*40000
       pub.post "C:#{Random.new.bytes 10000}", "application/octet-stream"
       pub.post "C:#{Random.new.bytes 40000}", "application/octet-stream"
+      pub.post "C:#{Random.new.bytes 1000000}", "application/octet-stream"
       pub.post "FIN"
       
       sub.wait
@@ -1708,12 +1728,12 @@ class PubSubTest <  Minitest::Test
     verify pub, sub, eventsource_event: true, id: true
   end
   
-  def test_publisher_upstream_request
+  def test_publisher_pubsub_upstream_request(websocket=false)
     auth = start_authserver  quiet: true
     begin
       assert "" != auth.publisher_upstream_transform_message("")
       
-      pub, sub = pubsub 2, pub: '/upstream_pubsub/' , quit_message: auth.publisher_upstream_transform_message('FIN')
+      pub, sub = pubsub 2, pub: '/upstream_pubsub/' , quit_message: auth.publisher_upstream_transform_message('FIN'), websocket_publisher: websocket
       sub.run
       pub.post ["foo", "bar", "Baz", "q"*2048, "FIN"]
       sub.wait
@@ -1744,6 +1764,44 @@ class PubSubTest <  Minitest::Test
     ensure
       auth.stop
     end
+  end
+  
+  def test_websocket_publisher_pubsub_upstream_request
+    test_publisher_pubsub_upstream_request(true)
+  end
+  
+  def test_websocket_permessage_deflate_allowed_windows_bits
+    server_min_window_bytes = 10
+    (0..30).each do |n|
+      ["permessage-deflate; client_max_window_bits", "permessage-deflate; server_max_window_bits", "deflate-frame; max_window_bits"].each do |ext|
+        request = Typhoeus::Request.new url("sub/broadcast/#{short_id}"), method: :GET, forbid_reuse: true, headers: {
+          'Upgrade' =>'Websocket',
+          'Connection' => 'Upgrade',
+          'Sec-WebSocket-Key' => 'BUy97UID2mxgDTFA+6EZHg==',
+          'Sec-WebSocket-Version' => '13',
+          'Sec-WebSocket-Extensions' => "#{ext}=#{n}"
+        }
+        resp = request.run
+        m = ext.match(/^(.*); (.*)/)
+        min_window_bytes = m[2].match(/^(server_)?max_window_bits/) ? server_min_window_bytes : 9
+        if n < min_window_bytes || n > 15 then
+          assert_equal 400, resp.code, "#{ext}=#{n} should be invalid"
+        else
+          assert_equal 101, resp.code, "#{ext}=#{n} should be valid"
+          assert_match m[1], resp.headers["Sec-WebSocket-Extensions"]
+          if m[2].match(/^(server_)?max_window_bits/)
+            #server_max_window_bits is always 10?...
+            reply_n = 10
+          else
+            reply_n = n
+          end
+          
+          assert_match "#{m[2]}=#{reply_n}", resp.headers["Sec-WebSocket-Extensions"]
+        end
+      end
+    end
+    
+    
   end
   
   def test_buffer_size_respected
