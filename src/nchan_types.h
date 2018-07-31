@@ -389,7 +389,7 @@ struct subscriber_s {
   void                      *upstream_requestmachine;
   ngx_uint_t                 reserved;
   
-  unsigned                   enable_sub_unsub_callbacks;
+  unsigned                   enable_sub_unsub_callbacks:1;
   unsigned                   dequeue_after_response:1;
   unsigned                   destroy_after_dequeue:1;
   unsigned                   enqueued:1;
