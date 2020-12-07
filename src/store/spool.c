@@ -476,7 +476,7 @@ static ngx_int_t spool_fetch_msg(subscriber_pool_t *spool) {
   data->spooler = spool->spooler;
   
   assert(spool->msg == NULL);
-  assert(spool->msg_status == MSG_INVALID);
+  // assert(spool->msg_status == MSG_INVALID);
   spool->msg_status = MSG_PENDING;
   if(spl->handlers->get_message_start) {
     spl->handlers->get_message_start(spl, spl->handlers_privdata);
